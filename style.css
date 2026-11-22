@@ -471,6 +471,14 @@ a:hover {
   box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.15);
 }
 
+select.form-control {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 32px;
+}
+
 select.form-control option {
   background: #121026;
   color: #ffffff;
@@ -1239,6 +1247,7 @@ textarea.form-control {
   .form-grid-2,
   .pill-selector,
   .addons-grid,
+  .features-grid,
   .pricing-grid {
     grid-template-columns: 1fr;
   }
