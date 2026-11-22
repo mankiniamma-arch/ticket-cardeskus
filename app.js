@@ -9,8 +9,8 @@ const CARDESK_CONFIG = {
   DOMAIN: "ticket.cardeskus.com",
   SUPPORT_EMAIL: "support@cardeskus.com",
 
-  // Batch 4 में Google Apps Script Deploy करने के बाद URL यहाँ जुड़ेगा
-  APPS_SCRIPT_URL: "",
+  // Live Google Apps Script + Gemini AI Backend URL
+  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbxBQfW830O0l0QS1aJML7vJDXO7oRPJr17GEIRNvabvWcCFwgnggbpJeZU87JWduMwZ/exec",
 
   // Dodo Payments अप्रूवल के बाद दोनों Checkout Links यहाँ जुड़ेंगे
   DODO_LINKS: {
@@ -488,7 +488,6 @@ function handleUnlockClick() {
     try {
       localStorage.setItem(STORAGE_KEYS.PENDING_ORDER, JSON.stringify(data));
     } catch (e) {
-      // If photo exceeded storage quota, save without photo
       const slim = { ...data, photoBase64: "", photoMime: "" };
       localStorage.setItem(STORAGE_KEYS.PENDING_ORDER, JSON.stringify(slim));
     }
@@ -539,8 +538,12 @@ function checkPaymentReturnCallback() {
 async function generateFullPacket(data, paymentRef) {
   showLoader("Scanning US municipal rules, auditing ticket details & drafting your official packet...");
 
+  const emailNote = document.getElementById("emailStatusNote");
+  if (emailNote) emailNote.classList.add("hidden");
+
   try {
     let resultPayload = null;
+    let backendError = "";
 
     if (CARDESK_CONFIG.APPS_SCRIPT_URL) {
       const response = await fetch(CARDESK_CONFIG.APPS_SCRIPT_URL, {
@@ -556,29 +559,34 @@ async function generateFullPacket(data, paymentRef) {
       const json = await response.json();
       if (json && json.ok && json.packet) {
         resultPayload = json.packet;
-        if (json.emailSent) {
-          const emailNote = document.getElementById("emailStatusNote");
-          if (emailNote) {
-            emailNote.textContent = `A copy of this packet has also been emailed to ${data.driverEmail}.`;
-            emailNote.classList.remove("hidden");
-          }
+        if (json.emailSent && emailNote) {
+          emailNote.textContent = `✓ Live AI Packet ready — a backup copy has also been emailed to ${data.driverEmail}.`;
+          emailNote.classList.remove("hidden");
         }
+        showToast("Live AI Appeal Packet Generated!");
+      } else {
+        backendError = (json && json.error) ? json.error : "Unknown backend error";
+        console.warn("CarDesk US Backend Notice:", backendError);
       }
     }
 
-    // Fallback generator ensures zero downtime if backend URL isn't pasted yet
+    // Fallback generator ensures zero downtime if backend has a temporary error
     if (!resultPayload) {
-      await new Promise((r) => setTimeout(r, 900));
+      await new Promise((r) => setTimeout(r, 700));
       resultPayload = buildStructuredFallbackPacket(data);
+      if (backendError) {
+        showToast("Backup template used (" + backendError.slice(0, 60) + ")");
+      }
     }
 
     APP_STATE.generatedPacket = resultPayload;
     renderResultDashboard(data, resultPayload);
   } catch (err) {
+    console.warn("CarDesk US Fetch Notice:", err);
     const fallback = buildStructuredFallbackPacket(data);
     APP_STATE.generatedPacket = fallback;
     renderResultDashboard(data, fallback);
-    showToast("Generated with offline US template engine. Check Apps Script connection if needed.");
+    showToast("Generated with offline US template engine.");
   } finally {
     hideLoader();
   }
@@ -633,7 +641,7 @@ Plate: ${plate} | Jurisdiction: ${data.city}, ${data.stateCode}
 
   const errorAudit = `AI TICKET ERROR & TECHNICAL AUDIT — ${data.city.toUpperCase()}, ${data.stateCode}
 ============================================================
-Photo Uploaded: ${data.photoBase64 ? "YES — Ready for Gemini Vision Scan (Connect Code.gs for OCR scan)" : "NO — Upload a ticket photo above for automated Vision OCR"}
+Photo Uploaded: ${data.photoBase64 ? "YES — Ready for Gemini Vision Scan" : "NO — Upload a ticket photo above for automated Vision OCR"}
 
 MANDATORY FIELD CHECKLIST (Check your physical citation line-by-line):
 1. License Plate & State: Confirm "${plate}" and issuing state match your registration exactly. Even a 1-character typo is a strong technical dismissal ground.
