@@ -1,7 +1,8 @@
 /* =========================================================
    CarDesk US — Core Frontend Engine (All 50 US States + D.C.)
-   Handles: State Intel, 4 Add-ons, Photo Compression, Pricing,
-   Dodo Payments Checkout, Apps Script + Gemini API, PWA & Modals
+   Handles: State & Municipal Portal Intel, Step-by-Step Self-Help
+   Playbook, 4 Add-ons, Photo Compression, Pricing, Dodo Checkout,
+   Apps Script + Gemini API, GA4 Events, PWA & Modals
    ========================================================= */
 
 const CARDESK_CONFIG = {
@@ -31,7 +32,7 @@ const APP_STATE = {
   photoMime: "",
   photoName: "",
   generatedPacket: null,
-  activeTab: "appealLetter",
+  activeTab: "stepByStepGuide",
   deferredInstallPrompt: null
 };
 
@@ -39,6 +40,15 @@ const STORAGE_KEYS = {
   PENDING_ORDER: "cardeskus_pending_order_v1",
   CREDITS: "cardeskus_bundle_credits_v1"
 };
+
+/* =========================================================
+   GA4 Analytics Helper
+   ========================================================= */
+function trackGAEvent(eventName, params = {}) {
+  if (typeof window.gtag === "function") {
+    window.gtag("event", eventName, params);
+  }
+}
 
 /* =========================================================
    Initialization
@@ -127,6 +137,7 @@ function bindEvents() {
     stateSelect.addEventListener("change", () => {
       renderStateInsight();
       updateReadinessMeter();
+      trackGAEvent("select_state", { state: stateSelect.value });
     });
   }
 
@@ -382,6 +393,9 @@ function collectFormData() {
     stateDeadline: st ? st.deadline : "15–30 days",
     statePointsRisk: st ? st.pointsRisk : "Parking tickets typically carry 0 DMV points",
     stateTip: st ? st.tip : "",
+    statePortalGuide: st && st.portalGuide
+      ? st.portalGuide
+      : "Check the issuing municipal court, county clerk, or city parking authority printed on your citation.",
     city: document.getElementById("cityInput")?.value.trim() || "",
     ticketType: APP_STATE.ticketType,
     citationNumber: document.getElementById("citationNumberInput")?.value.trim() || "",
@@ -458,9 +472,12 @@ function runInstantPreCheck() {
   ];
   const strength = strongReasons.includes(data.reason) ? "HIGH" : "MODERATE-HIGH";
 
+  trackGAEvent("run_free_precheck", { state: data.stateCode, city: data.city });
+
   content.innerHTML = `
     <p><strong>Case Strength (${data.city}, ${data.stateCode}):</strong> ${strength} (${st ? st.dismissalRate : "~40%"} est. contested dismissal range)</p>
-    <p style="margin-top:6px;"><strong>Potential Savings:</strong> Up to <strong>$${fineVal.toFixed(0)}</strong> vs. ${CARDESK_CONFIG.PRICES[APP_STATE.selectedPack].price} appeal packet.</p>
+    <p style="margin-top:6px;"><strong>Potential Savings:</strong> Up to <strong>$${fineVal.toFixed(0)}</strong> vs. ${CARDESK_CONFIG.PRICES[APP_STATE.selectedPack].price} self-help action packet.</p>
+    <p style="margin-top:6px;"><strong>Where You Will File:</strong> ${data.statePortalGuide}</p>
     <p style="margin-top:6px;"><strong>Immediate Tip:</strong> File within <strong>${data.stateDeadline}</strong>. ${APP_STATE.photoBase64 ? "Your uploaded ticket photo is queued for AI clerical error auditing." : "Upload a clear photo of your ticket to unlock the AI Clerical Error Audit."}</p>
   `;
   box.classList.remove("hidden");
@@ -478,13 +495,19 @@ function handleUnlockClick() {
   if (credits > 0) {
     setStoredCredits(credits - 1);
     showToast("1 Bundle Credit applied! Generating your complete AI packet...");
+    trackGAEvent("use_bundle_credit", { state: data.stateCode, city: data.city });
     generateFullPacket(data, "BUNDLE_CREDIT");
     return;
   }
 
   const checkoutBaseUrl = CARDESK_CONFIG.DODO_LINKS[APP_STATE.selectedPack];
   if (checkoutBaseUrl) {
-    // Save form payload locally so it auto-generates on Dodo return
+    trackGAEvent("begin_checkout", {
+      pack: APP_STATE.selectedPack,
+      state: data.stateCode,
+      city: data.city
+    });
+
     try {
       localStorage.setItem(STORAGE_KEYS.PENDING_ORDER, JSON.stringify(data));
     } catch (e) {
@@ -511,11 +534,15 @@ function checkPaymentReturnCallback() {
   const paidPack = params.get("pack") === "bundle" ? "bundle" : "single";
   const paymentId = params.get("payment_id") || params.get("session_id") || "DODO_VERIFIED";
 
-  // Clean query parameters from URL
   window.history.replaceState({}, document.title, window.location.pathname);
 
+  trackGAEvent("purchase_completed", {
+    pack: paidPack,
+    value: paidPack === "bundle" ? 14.99 : 9.99,
+    currency: "USD"
+  });
+
   if (paidPack === "bundle") {
-    // 1 credit used immediately, 2 credits stored for future tickets
     setStoredCredits(getStoredCredits() + 2);
   }
 
@@ -524,7 +551,7 @@ function checkPaymentReturnCallback() {
     try {
       const savedData = JSON.parse(savedRaw);
       localStorage.removeItem(STORAGE_KEYS.PENDING_ORDER);
-      showToast("Payment Confirmed! Generating your AI Appeal Packet...");
+      showToast("Payment Confirmed! Generating & emailing your Action Guide...");
       generateFullPacket(savedData, paymentId);
     } catch (err) {
       showToast("Payment confirmed! Please click Generate to build your packet.");
@@ -533,13 +560,81 @@ function checkPaymentReturnCallback() {
 }
 
 /* =========================================================
+   Build World-Class Step-by-Step Self-Help Filing Playbook
+   (Displayed on screen AND sent to Google Apps Script Email)
+   ========================================================= */
+function buildStepByStepFilingGuide(data) {
+  const citation = data.citationNumber || "[CITATION NUMBER]";
+  const plate = data.plateNumber || "[LICENSE PLATE]";
+  const tDate = data.ticketDate || "[ISSUE DATE]";
+  const fine = data.fineAmount ? `$${data.fineAmount}` : "the listed fine";
+
+  return `CARDESK US — STEP-BY-STEP SELF-HELP TICKET CONTEST PLAYBOOK
+Jurisdiction: ${data.city}, ${data.stateName} (${data.stateCode})
+Citation #: ${citation} | Plate: ${plate} | Issue Date: ${tDate}
+====================================================================
+IMPORTANT: You stay in 100% control and submit directly through your
+local government portal or clerk—no middlemen, no commission cuts.
+
+STEP 1: VERIFY YOUR FILING DEADLINE FIRST (${data.stateDeadline})
+--------------------------------------------------------------------
+• Check the front or back of Citation #${citation} for the exact
+  "Contest By / Response Due / Hearing Request" date.
+• Typical ${data.stateName} contest window: ${data.stateDeadline}.
+• Submit at least 48 hours before the deadline so online portal
+  cutoffs or mail postmarks do not trigger late penalties.
+
+STEP 2: LOCATE YOUR OFFICIAL ${data.city.toUpperCase()}, ${data.stateCode} PORTAL
+--------------------------------------------------------------------
+• ${data.statePortalGuide}
+• Official .gov Search Formula (copy into Google if URL isn't on ticket):
+  "${data.city} ${data.stateCode} contest ${data.ticketType} ticket"
+  OR "${data.city} ${data.stateCode} parking violations bureau dispute citation"
+• What to click once on the official municipal/court page:
+  1. Select "Contest a Ticket", "Dispute Citation", "Administrative Review",
+     or "Request a Hearing".
+  2. Enter Citation # (${citation}) and License Plate (${plate}).
+  3. Check whether your city allows free online review (most cities) or
+     requires a refundable fine deposit for a hearing.
+
+STEP 3: PREPARE & UPLOAD YOUR EVIDENCE EXHIBITS
+--------------------------------------------------------------------
+Before submitting, gather clear, objective files (PDF or JPG):
+[ ] Copy/photo of Citation #${citation}
+[ ] Shot 1: Wide street view showing vehicle location & approach visibility
+[ ] Shot 2: Close-up of missing, obstructed, faded, or conflicting sign/curb
+[ ] Shot 3: Meter display or ParkMobile / PayByPhone / kiosk receipt with timestamp
+[ ] Supporting proof (if applicable): Resident permit, loading proof, or repair/medical note
+
+STEP 4: PASTE YOUR CUSTOM APPEAL LETTER & SAVE CONFIRMATION
+--------------------------------------------------------------------
+• Open the "Official Appeal Letter" tab in this packet (or your email copy).
+• Verify all bracketed fields match your citation word-for-word.
+• Paste into the city's online dispute text box (or print & mail via
+  USPS Certified Mail if your municipality requires paper mail).
+• Save a screenshot/PDF of your portal Confirmation Number!
+
+STEP 5: PLAN B ESCALATION IF STAGE 1 IS AUTO-DENIED
+--------------------------------------------------------------------
+• High-volume cities often issue an automated Stage 1 denial.
+• Do NOT pay ${fine} right away if you have valid proof—check the denial
+  letter for the Stage 2 Hearing / Appeal window (usually 10–30 days)
+  and submit the "Plan B Rejection Script" included in this packet.
+
+Need support? Email support@cardeskus.com (Self-help drafting software; not a law firm).`;
+}
+
+/* =========================================================
    AI Generation — Google Apps Script (Gemini API) + Smart Fallback
    ========================================================= */
 async function generateFullPacket(data, paymentRef) {
-  showLoader("Scanning US municipal rules, auditing ticket details & drafting your official packet...");
+  showLoader("Building your Step-by-Step Filing Playbook, auditing ticket & drafting official packet...");
 
   const emailNote = document.getElementById("emailStatusNote");
   if (emailNote) emailNote.classList.add("hidden");
+
+  // Always build the tailored Step-by-Step Self-Help Guide first
+  const stepByStepGuide = buildStepByStepFilingGuide(data);
 
   try {
     let resultPayload = null;
@@ -552,47 +647,51 @@ async function generateFullPacket(data, paymentRef) {
         body: JSON.stringify({
           action: "generateTicketPacket",
           paymentRef,
+          stepByStepGuide,
           ticket: data
         })
       });
 
       const json = await response.json();
       if (json && json.ok && json.packet) {
-        resultPayload = json.packet;
+        resultPayload = {
+          stepByStepGuide: json.packet.stepByStepGuide || stepByStepGuide,
+          ...json.packet
+        };
         if (json.emailSent && emailNote) {
-          emailNote.textContent = `✓ Live AI Packet ready — a backup copy has also been emailed to ${data.driverEmail}.`;
+          emailNote.textContent = `✓ Step-by-Step Action Playbook & Appeal Packet emailed to ${data.driverEmail}.`;
           emailNote.classList.remove("hidden");
         }
-        showToast("Live AI Appeal Packet Generated!");
+        showToast("Live AI Action Playbook & Packet Generated!");
       } else {
         backendError = (json && json.error) ? json.error : "Unknown backend error";
         console.warn("CarDesk US Backend Notice:", backendError);
       }
     }
 
-    // Fallback generator ensures zero downtime if backend has a temporary error
     if (!resultPayload) {
       await new Promise((r) => setTimeout(r, 700));
-      resultPayload = buildStructuredFallbackPacket(data);
+      resultPayload = buildStructuredFallbackPacket(data, stepByStepGuide);
       if (backendError) {
         showToast("Backup template used (" + backendError.slice(0, 60) + ")");
       }
     }
 
     APP_STATE.generatedPacket = resultPayload;
+    trackGAEvent("packet_generated", { state: data.stateCode, city: data.city });
     renderResultDashboard(data, resultPayload);
   } catch (err) {
     console.warn("CarDesk US Fetch Notice:", err);
-    const fallback = buildStructuredFallbackPacket(data);
+    const fallback = buildStructuredFallbackPacket(data, stepByStepGuide);
     APP_STATE.generatedPacket = fallback;
     renderResultDashboard(data, fallback);
-    showToast("Generated with offline US template engine.");
+    showToast("Generated with offline US playbook engine.");
   } finally {
     hideLoader();
   }
 }
 
-function buildStructuredFallbackPacket(data) {
+function buildStructuredFallbackPacket(data, stepByStepGuide) {
   const today = new Date().toLocaleDateString("en-US", {
     year: "numeric", month: "long", day: "numeric"
   });
@@ -658,15 +757,15 @@ Jurisdiction: ${data.stateName} (${data.stateCode})
 Ticket Type: ${data.ticketType}
 
 1. DMV License Points Impact:
-   • ${data.statePointsRisk}
-   • Standard municipal parking tickets do NOT add points to your driver's license in ${data.stateName}.
+  - ${data.statePointsRisk}
+  - Standard municipal parking tickets do NOT add points to your driver's license in ${data.stateName}.
 
 2. Auto Insurance Premium Impact:
-   • Parking violations are civil/non-moving infractions and are NOT reported to your auto insurance carrier.
-   • ${data.ticketType.includes("Camera") ? "For camera tickets: Most states treat automated cameras as civil owner-liability fines (0 insurance impact), EXCEPT select jurisdictions like California/Arizona/Oregon if personally served as a moving violation. Contesting prevents moving-violation records." : "Zero expected insurance rate increase—however, unpaid parking tickets can trigger late penalties, registration holds, or collections."}
+  - Parking violations are civil/non-moving infractions and are NOT reported to your auto insurance carrier.
+  - ${data.ticketType.includes("Camera") ? "For camera tickets: Most states treat automated cameras as civil owner-liability fines (0 insurance impact), EXCEPT select jurisdictions like California/Arizona/Oregon if personally served as a moving violation. Contesting prevents moving-violation records." : "Zero expected insurance rate increase—however, unpaid parking tickets can trigger late penalties, registration holds, or collections."}
 
 3. Deadline Protection:
-   • File your written contest within ${data.stateDeadline} to freeze late fees and protect your vehicle registration renewal.`;
+  - File your written contest within ${data.stateDeadline} to freeze late fees and protect your vehicle registration renewal.`;
 
   const photoGuide = `EVIDENCE PHOTO ANGLE GUIDE (WINNING 4-SHOT CHECKLIST)
 ============================================================
@@ -704,7 +803,14 @@ THREE-POINT ESCALATION SUMMARY:
 Sincerely,
 ${data.driverName} | Citation #${citation} | ${data.driverEmail}`;
 
-  return { appealLetter, errorAudit, insuranceImpact, photoGuide, planBScript };
+  return {
+    stepByStepGuide: stepByStepGuide || buildStepByStepFilingGuide(data),
+    appealLetter,
+    errorAudit,
+    insuranceImpact,
+    photoGuide,
+    planBScript
+  };
 }
 
 /* =========================================================
@@ -719,6 +825,7 @@ function renderResultDashboard(data, packet) {
   metaEl.textContent = `${data.city}, ${data.stateCode} • ${data.ticketType} • Deadline: ${data.stateDeadline}`;
 
   const tabs = [
+    { key: "stepByStepGuide", label: "Step-by-Step Filing Guide", enabled: true },
     { key: "appealLetter", label: "Official Appeal Letter", enabled: true },
     { key: "errorAudit", label: "AI Ticket Error Audit", enabled: data.addons.photoAudit },
     { key: "insuranceImpact", label: "Insurance & Points", enabled: data.addons.insuranceCheck },
@@ -741,7 +848,7 @@ function renderResultDashboard(data, packet) {
     tabsWrap.appendChild(btn);
   });
 
-  APP_STATE.activeTab = "appealLetter";
+  APP_STATE.activeTab = "stepByStepGuide";
   renderActiveTabContent();
 
   section.classList.remove("hidden");
@@ -764,21 +871,23 @@ function copyFullPacket() {
   if (!APP_STATE.generatedPacket) return;
   const p = APP_STATE.generatedPacket;
   const combined = [
+    p.stepByStepGuide,
     p.appealLetter,
     p.errorAudit,
     p.insuranceImpact,
     p.photoGuide,
     p.planBScript
   ].filter(Boolean).join("\n\n------------------------------------------------------------\n\n");
-  navigator.clipboard.writeText(combined).then(() => showToast("Complete 5-part appeal packet copied!"));
+  navigator.clipboard.writeText(combined).then(() => showToast("Complete Step-by-Step Playbook & Appeal Packet copied!"));
 }
 
 function downloadPacketTxt() {
   if (!APP_STATE.generatedPacket) return;
   const p = APP_STATE.generatedPacket;
   const combined = [
-    "CARDESK US — OFFICIAL APPEAL PACKET (https://ticket.cardeskus.com)",
+    "CARDESK US — STEP-BY-STEP TICKET CONTEST PLAYBOOK (https://ticket.cardeskus.com)",
     "====================================================================",
+    p.stepByStepGuide,
     p.appealLetter,
     p.errorAudit,
     p.insuranceImpact,
@@ -790,12 +899,12 @@ function downloadPacketTxt() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "CarDeskUS-Ticket-Appeal-Packet.txt";
+  a.download = "CarDeskUS-Ticket-Contest-Playbook.txt";
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  showToast("Packet downloaded as .txt file!");
+  showToast("Playbook downloaded as .txt file!");
 }
 
 /* =========================================================
@@ -805,7 +914,7 @@ const POLICY_CONTENT = {
   refund: {
     title: "7-Day No-Questions-Asked Refund Policy",
     html: `
-      <p>At <strong>CarDesk US</strong>, we stand behind the clarity and quality of our AI-assisted document packets.</p>
+      <p>At <strong>CarDesk US</strong>, we stand behind the clarity and quality of our AI-assisted self-help document packets.</p>
       <h4>100% Refund Window (7 Days)</h4>
       <p>If you are not satisfied with your generated appeal packet for any reason, email us within <strong>7 calendar days</strong> of purchase at <strong>${CARDESK_CONFIG.SUPPORT_EMAIL}</strong> with your order email or payment receipt.</p>
       <h4>Fast Processing</h4>
@@ -817,7 +926,7 @@ const POLICY_CONTENT = {
     html: `
       <p><strong>Important Notice:</strong> CarDesk US (<code>ticket.cardeskus.com</code>) is an automated <strong>AI self-help document drafting and productivity software tool</strong>. We are <strong>NOT a law firm</strong>, we do not employ attorneys on your behalf, and no attorney-client relationship is created by using this platform.</p>
       <h4>User Responsibility</h4>
-      <p>All generated appeal letters, checklists, and escalation scripts are provided for informational and self-help drafting purposes only. You are solely responsible for reviewing accuracy, attaching truthful evidence, and submitting your dispute to the relevant US city or municipal agency before the statutory deadline.</p>
+      <p>All generated step-by-step filing guides, appeal letters, checklists, and escalation scripts are provided for informational and self-help drafting purposes only. You are solely responsible for reviewing accuracy, attaching truthful evidence, and submitting your dispute directly to the relevant US city or municipal agency before the statutory deadline.</p>
       <h4>No Guaranteed Dismissal</h4>
       <p>Final citation dismissal decisions rest exclusively with the local municipal hearing officer or court.</p>
     `
@@ -839,7 +948,7 @@ const POLICY_CONTENT = {
       <h4>Support Email</h4>
       <p><strong>${CARDESK_CONFIG.SUPPORT_EMAIL}</strong> (Response time: within 24 hours, 7 days a week)</p>
       <h4>Service Coverage</h4>
-      <p>All 50 US States + Washington, D.C. municipal parking and automated camera citation document drafting.</p>
+      <p>All 50 US States + Washington, D.C. municipal parking and automated camera citation self-help guides and document drafting.</p>
     `
   }
 };
