@@ -2,7 +2,8 @@
    CarDesk US — Core Frontend Engine (All 50 US States + D.C.)
    Handles: State & Municipal Portal Intel, Step-by-Step Self-Help
    Playbook, 4 Add-ons, Photo Compression, Pricing, Dodo Checkout,
-   Apps Script + Gemini API, GA4 Events, PWA & Modals
+   Apps Script + Gemini API, GA4 + UTM Attribution, SEO Auto-Prefill,
+   PWA & Modals
    ========================================================= */
 
 const CARDESK_CONFIG = {
@@ -38,28 +39,68 @@ const APP_STATE = {
 
 const STORAGE_KEYS = {
   PENDING_ORDER: "cardeskus_pending_order_v1",
-  CREDITS: "cardeskus_bundle_credits_v1"
+  CREDITS: "cardeskus_bundle_credits_v1",
+  UTM: "cardeskus_utm_attribution_v1"
 };
 
 /* =========================================================
-   GA4 Analytics Helper
+   GA4 Analytics & UTM Attribution Helper
    ========================================================= */
+function captureUtmParams() {
+  const params = new URLSearchParams(window.location.search);
+  const src = params.get("utm_source");
+  const med = params.get("utm_medium");
+  const camp = params.get("utm_campaign");
+  if (src || med || camp) {
+    try {
+      sessionStorage.setItem(
+        STORAGE_KEYS.UTM,
+        JSON.stringify({
+          utm_source: src || "direct",
+          utm_medium: med || "organic",
+          utm_campaign: camp || "none"
+        })
+      );
+    } catch (e) {}
+  }
+}
+
+function getStoredUtm() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEYS.UTM);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
 function trackGAEvent(eventName, params = {}) {
   if (typeof window.gtag === "function") {
-    window.gtag("event", eventName, params);
+    window.gtag("event", eventName, { ...getStoredUtm(), ...params });
   }
+}
+
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /* =========================================================
    Initialization
    ========================================================= */
 document.addEventListener("DOMContentLoaded", () => {
+  captureUtmParams();
   registerServiceWorker();
   setupInstallPrompt();
   populateStatesDropdown();
   bindEvents();
   updateCreditsUI();
   updatePackUI("single");
+  applyIncomingSeoParams();
   updateReadinessMeter();
   checkPaymentReturnCallback();
 });
@@ -86,6 +127,110 @@ function setupInstallPrompt() {
       APP_STATE.deferredInstallPrompt = null;
       installBtn.classList.add("hidden");
     });
+  }
+}
+
+/* =========================================================
+   Seamless SEO / Free Checker -> Main Builder Auto-Prefill
+   Reads: ?state=NY&city=New+York&type=camera&reason=signage&pack=bundle
+   ========================================================= */
+function applyIncomingSeoParams() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("payment") === "success") return;
+
+  const stateParam = (params.get("state") || "").trim().toUpperCase();
+  const cityParam = (params.get("city") || "").trim();
+  const typeParam = (params.get("type") || params.get("violation") || "").trim().toLowerCase();
+  const reasonParam = (params.get("reason") || "").trim().toLowerCase();
+  const packParam = (params.get("pack") || "").trim().toLowerCase();
+
+  let prefilled = false;
+
+  // 1. Pre-select US State / D.C.
+  const stateSelect = document.getElementById("stateSelect");
+  if (stateSelect && stateParam) {
+    const matchedOpt = Array.from(stateSelect.options).find(
+      (opt) => opt.value.toUpperCase() === stateParam || opt.textContent.toUpperCase().includes(`(${stateParam})`)
+    );
+    if (matchedOpt) {
+      stateSelect.value = matchedOpt.value;
+      renderStateInsight();
+      prefilled = true;
+    }
+  }
+
+  // 2. Pre-fill City Input
+  const cityInput = document.getElementById("cityInput");
+  if (cityInput && cityParam) {
+    cityInput.value = cityParam;
+    prefilled = true;
+  }
+
+  // 3. Match Ticket Type Pill flexibly
+  if (typeParam) {
+    const pills = Array.from(document.querySelectorAll(".type-pill"));
+    const keywordMap = {
+      "camera ticket": ["camera", "red", "speed"],
+      "camera": ["camera", "red", "speed"],
+      "street sweeping": ["sweep", "clean", "alternate"],
+      "expired meter": ["meter", "expired", "kiosk"],
+      "no parking sign": ["sign", "curb", "no parking", "tow"],
+      "permit zone": ["permit", "resident", "zone"]
+    };
+    const searchTokens = keywordMap[typeParam] || [typeParam];
+    const matchedPill = pills.find((p) => {
+      const hay = `${p.dataset.type || ""} ${p.textContent || ""}`.toLowerCase();
+      return searchTokens.some((tok) => hay.includes(tok));
+    });
+    if (matchedPill) {
+      pills.forEach((p) => p.classList.remove("active"));
+      matchedPill.classList.add("active");
+      APP_STATE.ticketType = matchedPill.dataset.type || matchedPill.textContent.trim();
+      prefilled = true;
+    }
+  }
+
+  // 4. Match Primary Dispute Reason flexibly
+  const reasonSelect = document.getElementById("reasonSelect");
+  if (reasonSelect && reasonParam) {
+    const reasonKeywords = {
+      "clerical": ["clerical"],
+      "signage": ["obstructed", "signage"],
+      "meter": ["broken meter", "malfunctioning", "receipt"],
+      "camera": ["camera calibration", "signal timing"],
+      "emergency": ["breakdown", "medical emergency"]
+    };
+    const tokens = reasonKeywords[reasonParam] || [reasonParam];
+    const matchedReason = Array.from(reasonSelect.options).find((opt) => {
+      const hay = `${opt.value} ${opt.textContent}`.toLowerCase();
+      return opt.value && tokens.some((tok) => hay.includes(tok));
+    });
+    if (matchedReason) {
+      reasonSelect.value = matchedReason.value;
+      prefilled = true;
+    }
+  }
+
+  // 5. Optional Pack Pre-Selection
+  if (packParam === "bundle" || packParam === "single") {
+    updatePackUI(packParam);
+  }
+
+  if (prefilled) {
+    updateReadinessMeter();
+    trackGAEvent("seo_checker_handoff", {
+      state: stateParam || "none",
+      city: cityParam || "none",
+      ticket_type: APP_STATE.ticketType
+    });
+
+    const builder = document.getElementById("builder");
+    if (builder) {
+      setTimeout(() => {
+        builder.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 250);
+    }
+    showToast("Your ticket details from the Free Checker are pre-filled below!");
   }
 }
 
@@ -475,10 +620,10 @@ function runInstantPreCheck() {
   trackGAEvent("run_free_precheck", { state: data.stateCode, city: data.city });
 
   content.innerHTML = `
-    <p><strong>Case Strength (${data.city}, ${data.stateCode}):</strong> ${strength} (${st ? st.dismissalRate : "~40%"} est. contested dismissal range)</p>
+    <p><strong>Case Strength (${escapeHtml(data.city)}, ${escapeHtml(data.stateCode)}):</strong> ${strength} (${escapeHtml(st ? st.dismissalRate : "~40%")} est. contested dismissal range)</p>
     <p style="margin-top:6px;"><strong>Potential Savings:</strong> Up to <strong>$${fineVal.toFixed(0)}</strong> vs. ${CARDESK_CONFIG.PRICES[APP_STATE.selectedPack].price} self-help action packet.</p>
-    <p style="margin-top:6px;"><strong>Where You Will File:</strong> ${data.statePortalGuide}</p>
-    <p style="margin-top:6px;"><strong>Immediate Tip:</strong> File within <strong>${data.stateDeadline}</strong>. ${APP_STATE.photoBase64 ? "Your uploaded ticket photo is queued for AI clerical error auditing." : "Upload a clear photo of your ticket to unlock the AI Clerical Error Audit."}</p>
+    <p style="margin-top:6px;"><strong>Where You Will File:</strong> ${escapeHtml(data.statePortalGuide)}</p>
+    <p style="margin-top:6px;"><strong>Immediate Tip:</strong> File within <strong>${escapeHtml(data.stateDeadline)}</strong>. ${APP_STATE.photoBase64 ? "Your uploaded ticket photo is queued for AI clerical error auditing." : "Upload a clear photo of your ticket to unlock the AI Clerical Error Audit."}</p>
   `;
   box.classList.remove("hidden");
   showToast("Free Pre-Check Complete!");
@@ -578,19 +723,19 @@ local government portal or clerk—no middlemen, no commission cuts.
 
 STEP 1: VERIFY YOUR FILING DEADLINE FIRST (${data.stateDeadline})
 --------------------------------------------------------------------
-• Check the front or back of Citation #${citation} for the exact
+- Check the front or back of Citation #${citation} for the exact
   "Contest By / Response Due / Hearing Request" date.
-• Typical ${data.stateName} contest window: ${data.stateDeadline}.
-• Submit at least 48 hours before the deadline so online portal
+- Typical ${data.stateName} contest window: ${data.stateDeadline}.
+- Submit at least 48 hours before the deadline so online portal
   cutoffs or mail postmarks do not trigger late penalties.
 
 STEP 2: LOCATE YOUR OFFICIAL ${data.city.toUpperCase()}, ${data.stateCode} PORTAL
 --------------------------------------------------------------------
-• ${data.statePortalGuide}
-• Official .gov Search Formula (copy into Google if URL isn't on ticket):
+- ${data.statePortalGuide}
+- Official .gov Search Formula (copy into Google if URL isn't on ticket):
   "${data.city} ${data.stateCode} contest ${data.ticketType} ticket"
   OR "${data.city} ${data.stateCode} parking violations bureau dispute citation"
-• What to click once on the official municipal/court page:
+- What to click once on the official municipal/court page:
   1. Select "Contest a Ticket", "Dispute Citation", "Administrative Review",
      or "Request a Hearing".
   2. Enter Citation # (${citation}) and License Plate (${plate}).
@@ -608,16 +753,16 @@ Before submitting, gather clear, objective files (PDF or JPG):
 
 STEP 4: PASTE YOUR CUSTOM APPEAL LETTER & SAVE CONFIRMATION
 --------------------------------------------------------------------
-• Open the "Official Appeal Letter" tab in this packet (or your email copy).
-• Verify all bracketed fields match your citation word-for-word.
-• Paste into the city's online dispute text box (or print & mail via
+- Open the "Official Appeal Letter" tab in this packet (or your email copy).
+- Verify all bracketed fields match your citation word-for-word.
+- Paste into the city's online dispute text box (or print & mail via
   USPS Certified Mail if your municipality requires paper mail).
-• Save a screenshot/PDF of your portal Confirmation Number!
+- Save a screenshot/PDF of your portal Confirmation Number!
 
 STEP 5: PLAN B ESCALATION IF STAGE 1 IS AUTO-DENIED
 --------------------------------------------------------------------
-• High-volume cities often issue an automated Stage 1 denial.
-• Do NOT pay ${fine} right away if you have valid proof—check the denial
+- High-volume cities often issue an automated Stage 1 denial.
+- Do NOT pay ${fine} right away if you have valid proof—check the denial
   letter for the Stage 2 Hearing / Appeal window (usually 10–30 days)
   and submit the "Plan B Rejection Script" included in this packet.
 
@@ -633,7 +778,6 @@ async function generateFullPacket(data, paymentRef) {
   const emailNote = document.getElementById("emailStatusNote");
   if (emailNote) emailNote.classList.add("hidden");
 
-  // Always build the tailored Step-by-Step Self-Help Guide first
   const stepByStepGuide = buildStepByStepFilingGuide(data);
 
   try {
@@ -647,6 +791,7 @@ async function generateFullPacket(data, paymentRef) {
         body: JSON.stringify({
           action: "generateTicketPacket",
           paymentRef,
+          utm: getStoredUtm(),
           stepByStepGuide,
           ticket: data
         })
@@ -987,7 +1132,7 @@ let toastTimer = null;
 function showToast(message) {
   const wrap = document.getElementById("toastContainer");
   if (!wrap) return;
-  wrap.innerHTML = `<div class="toast">${message}</div>`;
+  wrap.innerHTML = `<div class="toast">${escapeHtml(message)}</div>`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     wrap.innerHTML = "";
