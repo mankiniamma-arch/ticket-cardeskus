@@ -8,16 +8,17 @@
 
 const CARDESK_CONFIG = {
   BRAND_NAME: "CarDesk US",
+  LEGAL_ENTITY: "MANKINIAMMA TECHNOLOGIES PRIVATE LIMITED",
   DOMAIN: "ticket.cardeskus.com",
   SUPPORT_EMAIL: "support@cardeskus.com",
 
   // Live Google Apps Script + Gemini AI Backend URL
   APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbxBQfW830O0l0QS1aJML7vJDXO7oRPJr17GEIRNvabvWcCFwgnggbpJeZU87JWduMwZ/exec",
 
-  // Dodo Payments अप्रूवल के बाद दोनों Checkout Links यहाँ जुड़ेंगे
+  // Dodo Payments Live Mode Checkout Links
   DODO_LINKS: {
-    single: "", // $9.99 — 1-Ticket Appeal Pack
-    bundle: ""  // $14.99 — 3-Ticket Bundle Pass
+    single: "https://checkout.dodopayments.com/buy/pdt_0NsVk3gHBEyun5c9MJGSY", // $9.99 — 1-Ticket Appeal Pack
+    bundle: "https://checkout.dodopayments.com/buy/pdt_0NsVkcXUoMrDbVM8ziBre"  // $14.99 — 3-Ticket Bundle Pass
   },
 
   PRICES: {
@@ -662,7 +663,7 @@ function handleUnlockClick() {
 
     const sep = checkoutBaseUrl.includes("?") ? "&" : "?";
     const returnUrl = encodeURIComponent(`https://${CARDESK_CONFIG.DOMAIN}/?payment=success&pack=${APP_STATE.selectedPack}`);
-    const fullCheckoutUrl = `${checkoutBaseUrl}${sep}email=${encodeURIComponent(data.driverEmail)}&redirect_url=${returnUrl}`;
+    const fullCheckoutUrl = `${checkoutBaseUrl}${sep}quantity=1&fullName=${encodeURIComponent(data.driverName)}&email=${encodeURIComponent(data.driverEmail)}&country=US&redirect_url=${returnUrl}`;
     showToast("Redirecting to secure Dodo Payments checkout...");
     window.location.href = fullCheckoutUrl;
     return;
@@ -675,6 +676,9 @@ function handleUnlockClick() {
 function checkPaymentReturnCallback() {
   const params = new URLSearchParams(window.location.search);
   if (params.get("payment") !== "success") return;
+
+  const paymentStatus = (params.get("status") || "").toLowerCase();
+  if (paymentStatus && paymentStatus !== "succeeded") return;
 
   const paidPack = params.get("pack") === "bundle" ? "bundle" : "single";
   const paymentId = params.get("payment_id") || params.get("session_id") || "DODO_VERIFIED";
@@ -902,15 +906,15 @@ Jurisdiction: ${data.stateName} (${data.stateCode})
 Ticket Type: ${data.ticketType}
 
 1. DMV License Points Impact:
-  - ${data.statePointsRisk}
-  - Standard municipal parking tickets do NOT add points to your driver's license in ${data.stateName}.
+   - ${data.statePointsRisk}
+   - Standard municipal parking tickets do NOT add points to your driver's license in ${data.stateName}.
 
 2. Auto Insurance Premium Impact:
-  - Parking violations are civil/non-moving infractions and are NOT reported to your auto insurance carrier.
-  - ${data.ticketType.includes("Camera") ? "For camera tickets: Most states treat automated cameras as civil owner-liability fines (0 insurance impact), EXCEPT select jurisdictions like California/Arizona/Oregon if personally served as a moving violation. Contesting prevents moving-violation records." : "Zero expected insurance rate increase—however, unpaid parking tickets can trigger late penalties, registration holds, or collections."}
+   - Parking violations are civil/non-moving infractions and are NOT reported to your auto insurance carrier.
+   - ${data.ticketType.includes("Camera") ? "For camera tickets: Most states treat automated cameras as civil owner-liability fines (0 insurance impact), EXCEPT select jurisdictions like California/Arizona/Oregon if personally served as a moving violation. Contesting prevents moving-violation records." : "Zero expected insurance rate increase—however, unpaid parking tickets can trigger late penalties, registration holds, or collections."}
 
 3. Deadline Protection:
-  - File your written contest within ${data.stateDeadline} to freeze late fees and protect your vehicle registration renewal.`;
+   - File your written contest within ${data.stateDeadline} to freeze late fees and protect your vehicle registration renewal.`;
 
   const photoGuide = `EVIDENCE PHOTO ANGLE GUIDE (WINNING 4-SHOT CHECKLIST)
 ============================================================
@@ -1059,7 +1063,7 @@ const POLICY_CONTENT = {
   refund: {
     title: "7-Day No-Questions-Asked Refund Policy",
     html: `
-      <p>At <strong>CarDesk US</strong>, we stand behind the clarity and quality of our AI-assisted self-help document packets.</p>
+      <p>At <strong>CarDesk US</strong> (operated by <strong>${CARDESK_CONFIG.LEGAL_ENTITY}</strong>), we stand behind the clarity and quality of our AI-assisted self-help document packets.</p>
       <h4>100% Refund Window (7 Days)</h4>
       <p>If you are not satisfied with your generated appeal packet for any reason, email us within <strong>7 calendar days</strong> of purchase at <strong>${CARDESK_CONFIG.SUPPORT_EMAIL}</strong> with your order email or payment receipt.</p>
       <h4>Fast Processing</h4>
@@ -1069,7 +1073,7 @@ const POLICY_CONTENT = {
   terms: {
     title: "Terms of Service & Legal Disclaimer",
     html: `
-      <p><strong>Important Notice:</strong> CarDesk US (<code>ticket.cardeskus.com</code>) is an automated <strong>AI self-help document drafting and productivity software tool</strong>. We are <strong>NOT a law firm</strong>, we do not employ attorneys on your behalf, and no attorney-client relationship is created by using this platform.</p>
+      <p><strong>Important Notice:</strong> CarDesk US (<code>ticket.cardeskus.com</code>), operated by <strong>${CARDESK_CONFIG.LEGAL_ENTITY}</strong>, is an automated <strong>AI self-help document drafting and productivity software tool</strong>. We are <strong>NOT a law firm</strong>, we do not employ attorneys on your behalf, and no attorney-client relationship is created by using this platform.</p>
       <h4>User Responsibility</h4>
       <p>All generated step-by-step filing guides, appeal letters, checklists, and escalation scripts are provided for informational and self-help drafting purposes only. You are solely responsible for reviewing accuracy, attaching truthful evidence, and submitting your dispute directly to the relevant US city or municipal agency before the statutory deadline.</p>
       <h4>No Guaranteed Dismissal</h4>
@@ -1079,7 +1083,7 @@ const POLICY_CONTENT = {
   privacy: {
     title: "Privacy Policy",
     html: `
-      <p>Your privacy matters. CarDesk US collects only the ticket details, optional ticket photo, and email address you submit in order to generate and deliver your requested appeal packet.</p>
+      <p>Your privacy matters. CarDesk US (<strong>${CARDESK_CONFIG.LEGAL_ENTITY}</strong>) collects only the ticket details, optional ticket photo, and email address you submit in order to generate and deliver your requested appeal packet.</p>
       <h4>Payments & Security</h4>
       <p>All card, Apple Pay, and Google Pay transactions are processed securely through <strong>Dodo Payments</strong>. CarDesk US never stores your credit card number.</p>
       <h4>Data Usage & Deletion</h4>
@@ -1090,8 +1094,8 @@ const POLICY_CONTENT = {
     title: "Customer Support — CarDesk US",
     html: `
       <p>Need help with your 1-Ticket Appeal Pack, 3-Ticket Bundle Pass, or a refund request?</p>
-      <h4>Support Email</h4>
-      <p><strong>${CARDESK_CONFIG.SUPPORT_EMAIL}</strong> (Response time: within 24 hours, 7 days a week)</p>
+      <h4>Support Email & Legal Entity</h4>
+      <p><strong>${CARDESK_CONFIG.SUPPORT_EMAIL}</strong> (Response time: within 24 hours, 7 days a week)<br/>Operated by: <strong>${CARDESK_CONFIG.LEGAL_ENTITY}</strong></p>
       <h4>Service Coverage</h4>
       <p>All 50 US States + Washington, D.C. municipal parking and automated camera citation self-help guides and document drafting.</p>
     `
